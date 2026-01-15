@@ -1,0 +1,138 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  # ステージングデプロイ（PRのCI成功後）
+  deploy-staging:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # Vercel Preview Deploy + Staging Alias
+      - name: Deploy to Vercel (staging)
+        id: vercel-deploy
+        run: |
+          url=$(npx vercel deploy --token=${{ secrets.VERCEL_TOKEN }})
+          echo "preview-url=$url" >> $GITHUB_OUTPUT
+          npx vercel alias set "$url" staging.ato-editor.app --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      # Cloudflare Workers Deploy (staging)
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ato/shared build
+      - name: Deploy to Cloudflare Workers (staging)
+        working-directory: apps/backend
+        run: npx wrangler deploy --env staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # PRにコメント
+      - name: Comment preview URL on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${context.payload.workflow_run.head_branch}`,
+              state: 'open'
+            });
+            if (prs.data.length > 0) {
+              await github.rest.issues.createComment({
+                issue_number: prs.data[0].number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `🚀 Preview deployed!\n\n**Frontend (Staging):** https://staging.ato-editor.app/\n**Frontend (Preview):** ${{ steps.vercel-deploy.outputs.preview-url }}\n**API:** https://api-staging.ato-editor.app`
+              });
+            }
+
+  # 本番デプロイ（mainへのpush/merge後、CI成功時）
+  deploy-production:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # Vercel Production Deploy
+      - name: Deploy to Vercel (production)
+        run: npx vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      # Cloudflare Workers Deploy (production)
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ato/shared build
+      - name: Deploy to Cloudflare Workers (production)
+        working-directory: apps/backend
+        run: npx wrangler deploy --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  # Smokeテスト（本番デプロイ成功後）
+  smoke-test:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for deployment propagation
+        run: sleep 30
+
+      - name: Check API health
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://api.ato-editor.app/health)
+          if [ "$response" != "200" ]; then
+            echo "API health check failed with status $response"
+            exit 1
+          fi
+          echo "API health check passed"
+
+      - name: Check frontend
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://ato-editor.app)
+          if [ "$response" != "200" ]; then
+            echo "Frontend check failed with status $response"
+            exit 1
+          fi
+          echo "Frontend check passed"
+
+      - name: Notify success
+        if: success()
+        run: echo "Production deployment completed successfully"
+
+      - name: Notify failure
+        if: failure()
+        run: echo "Production deployment smoke test failed - consider rollback"

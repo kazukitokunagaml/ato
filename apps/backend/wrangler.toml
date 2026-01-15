@@ -1,0 +1,41 @@
+name = "ato-backend-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[dev]
+port = 8787
+
+# ステージング環境
+[env.staging]
+name = "ato-backend-api-staging"
+routes = [
+  { pattern = "api-staging.ato-editor.app", custom_domain = true }
+]
+
+[env.staging.vars]
+APP_ENV = "staging"
+
+[env.staging.observability]
+enabled = true
+
+[env.staging.observability.logs]
+enabled = true
+invocation_logs = true
+
+# 本番環境
+[env.production]
+name = "ato-backend-api-production"
+routes = [
+  { pattern = "api.ato-editor.app", custom_domain = true }
+]
+
+[env.production.vars]
+APP_ENV = "production"
+
+[env.production.observability]
+enabled = true
+
+[env.production.observability.logs]
+enabled = true
+invocation_logs = true

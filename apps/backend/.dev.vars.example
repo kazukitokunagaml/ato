@@ -1,0 +1,16 @@
+# Application Environment
+APP_ENV=development
+
+# Database (Neon Development Branch)
+DATABASE_URL=postgresql://user:password@host/neondb?sslmode=require
+
+# JWT Keys (development)
+JWT_PRIVATE_KEY=
+JWT_PUBLIC_KEY=
+
+# Google OAuth (optional for development - use dev-login instead)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Development User (for dev-login)
+DEV_USER_EMAIL=dev@example.com
