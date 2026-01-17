@@ -4,15 +4,18 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  push:
+    branches: [main]
 
 concurrency:
-  group: deploy-${{ github.event.workflow_run.head_branch }}
+  group: deploy-${{ github.event.workflow_run.head_branch || github.ref }}
   cancel-in-progress: true
 
 jobs:
   # ステージングデプロイ（PRのCI成功後）
   deploy-staging:
     if: >
+      github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
@@ -28,7 +31,7 @@ jobs:
         run: |
           url=$(npx vercel deploy --token=${{ secrets.VERCEL_TOKEN }})
           echo "preview-url=$url" >> $GITHUB_OUTPUT
-          npx vercel alias set "$url" staging.ato-editor.app --token=${{ secrets.VERCEL_TOKEN }}
+          npx vercel alias set "$url" staging.ato-editor.app --token=${{ secrets.VERCEL_TOKEN }} --scope=${{ secrets.VERCEL_ORG_ID }}
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -68,12 +71,9 @@ jobs:
               });
             }
 
-  # 本番デプロイ（mainへのpush/merge後、CI成功時）
+  # 本番デプロイ（mainへのpush）
   deploy-production:
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
